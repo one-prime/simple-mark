@@ -109,6 +109,8 @@ try {
   await page.keyboard.type('!');
   await page.keyboard.press('Enter');
   await page.keyboard.type('x');
+  // The last word typed is sent after a pause (or before VS Code needs the document).
+  await page.waitForTimeout(600);
   const sent = await toHost();
   const edits = sent.filter((m) => m.type === 'edit').flatMap((m) => m.edits);
   check(
@@ -185,6 +187,35 @@ try {
   await page.waitForTimeout(150);
   check((await lineText(0)) === 'Intro한 ' && (await focused()), `Tab while composing Korean indents after the syllable (${JSON.stringify(await lineText(0))})`);
   for (let i = 0; i < (await toHost()).filter((m) => m.type === 'edit').length; i++) await fromHost({ type: 'ack', ok: true });
+
+  // Typing is sent in VS Code's undo steps: a word at a time, a run of deletions at once.
+  await toHost();
+  await page.locator('.cm-line', { hasText: 'Intro' }).click();
+  await page.keyboard.press('End');
+  await page.keyboard.type(' hello world');
+  await page.waitForTimeout(600);
+  const words = (await toHost()).filter((m) => m.type === 'edit').map((m) => m.edits.map((e) => e.text).join(''));
+  check(JSON.stringify(words) === JSON.stringify([' hello', ' world']), `typing is sent a word at a time (${JSON.stringify(words)})`);
+  for (let i = 0; i < words.length; i++) await fromHost({ type: 'ack', ok: true });
+  for (let i = 0; i < 3; i++) await page.keyboard.press('Backspace');
+  await page.keyboard.type('k');
+  await page.keyboard.press('Control+z');
+  const groups = (await toHost()).filter((m) => m.type === 'edit').map((m) => m.edits);
+  check(
+    groups.length === 2 && groups[0][0].text === '' && groups[0][0].to.ch - groups[0][0].from.ch === 3 && groups[1][0].text === 'k',
+    `three Backspaces are one edit, and a shortcut (Ctrl+Z) sends what was typed first (${JSON.stringify(groups)})`,
+  );
+  for (let i = 0; i < groups.length; i++) await fromHost({ type: 'ack', ok: true });
+
+  // Before a save the host asks for a flush: what was typed goes out before the answer.
+  await page.keyboard.type('Z');
+  await fromHost({ type: 'flush', id: 7 });
+  const beforeSave = await toHost();
+  check(
+    beforeSave.length === 2 && beforeSave[0].type === 'edit' && beforeSave[0].edits[0].text === 'Z' && beforeSave[1].type === 'flushed' && beforeSave[1].id === 7,
+    `a flush sends the typing, then answers (${JSON.stringify(beforeSave.map((m) => m.type))})`,
+  );
+  await fromHost({ type: 'ack', ok: true });
 
   // VS Code gives the focus back (Ctrl+1, switching tabs) by focusing the webview's window only;
   // the editor must take it, with the cursor where it was. A click from outside still places

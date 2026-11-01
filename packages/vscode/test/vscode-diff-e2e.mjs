@@ -5,7 +5,7 @@
 // Run `npm run build` first. SMOKE_SHOTS=<folder> saves screenshots.
 
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { _electron as electron } from 'playwright-core';
@@ -13,7 +13,23 @@ import { _electron as electron } from 'playwright-core';
 const extension = new URL('..', import.meta.url).pathname;
 const root = mkdtempSync(join(tmpdir(), 'simple-mark-e2e-'));
 const repo = join(root, 'repo');
-const user = join(root, 'user');
+/** A fresh profile for each launch, so no editor is restored from the one before. */
+let launches = 0;
+function profile() {
+  const user = join(root, `user-${++launches}`);
+  execFileSync('mkdir', ['-p', join(user, 'User')]);
+  writeFileSync(
+    join(user, 'User', 'settings.json'),
+    JSON.stringify({
+      'diffEditor.renderSideBySide': true,
+      'workbench.startupEditor': 'none',
+      'security.workspace.trust.enabled': false,
+      'git.openDiffOnClick': true,
+      'window.restoreWindows': 'none',
+    }),
+  );
+  return user;
+}
 
 const git = (...args) => execFileSync('git', ['-C', repo, ...args], { stdio: 'pipe' });
 execFileSync('git', ['init', '-q', repo]);
@@ -25,17 +41,6 @@ writeFileSync(join(repo, 'note.md'), before);
 git('add', '.');
 git('commit', '-q', '-m', 'first');
 writeFileSync(join(repo, 'note.md'), after);
-execFileSync('mkdir', ['-p', join(user, 'User')]);
-writeFileSync(
-  join(user, 'User', 'settings.json'),
-  JSON.stringify({
-    'diffEditor.renderSideBySide': true,
-    'workbench.startupEditor': 'none',
-    'security.workspace.trust.enabled': false,
-    'git.openDiffOnClick': true,
-    'window.restoreWindows': 'none',
-  }),
-);
 
 const failures = [];
 const check = (ok, message) => {
@@ -52,7 +57,7 @@ const launch = (proposal) =>
       `--extensionDevelopmentPath=${extension}`,
       // Stable VS Code allows proposed APIs only to extensions named here (or in argv.json).
       ...(proposal ? ['--enable-proposed-api=Simple-Mark.simple-mark'] : []),
-      `--user-data-dir=${user}`,
+      `--user-data-dir=${profile()}`,
       `--extensions-dir=${join(root, 'extensions')}`,
       '--disable-workspace-trust',
       '--skip-welcome',
@@ -103,6 +108,78 @@ async function runCommand(window, title) {
   await window.keyboard.press('Enter');
 }
 
+/** The webview frame showing `side` ('original', 'modified', 'inline' or 'editor'). */
+async function frameOf(window, side) {
+  for (const frame of window.frames()) {
+    const shown = await frame
+      .evaluate(() => {
+        const editor = document.querySelector('.cm-editor');
+        if (!editor) return null;
+        return [...editor.classList].find((c) => /^sm-diff-(original|modified|inline)$/.test(c))?.slice('sm-diff-'.length) ?? 'editor';
+      })
+      .catch(() => null);
+    if (shown === side) return frame;
+  }
+  return null;
+}
+
+const disk = () => readFileSync(join(repo, 'note.md'), 'utf8');
+const lineTexts = (frame) => frame.evaluate(() => [...document.querySelectorAll('.cm-line')].map((l) => l.textContent));
+
+/**
+ * Edits the working file in the diff as in a text editor: types, saves, undoes. Then puts the
+ * file back as it was.
+ */
+async function checkEditing(window, side) {
+  const frame = await frameOf(window, side);
+  await frame.locator('.cm-line', { hasText: 'Last line.' }).click();
+  await window.keyboard.press('End');
+  await window.keyboard.type(' Edited');
+  await window.keyboard.press('Enter');
+  await window.keyboard.type('**New** line');
+  const shown = await waitFor(() => webviews(window), (v) => v.find((w) => w.side === side)?.changed.includes('**New** line'), 5000);
+  const mine = shown.find((w) => w.side === side);
+  check(mine?.changed.includes('Last line. Edited') && mine.changed.includes('**New** line'), `${side}: typed text is marked as added (${JSON.stringify(mine?.changed)})`);
+  if (side === 'modified') {
+    const original = await waitFor(() => webviews(window), (v) => v.find((w) => w.side === 'original')?.changed.includes('Last line.'), 5000);
+    check(original.find((w) => w.side === 'original')?.changed.includes('Last line.'), `${side}: the original side marks the line that was edited`);
+  } else {
+    check(mine?.deleted.includes('Last line.'), `${side}: the edited line's old text is shown above it (${JSON.stringify(mine?.deleted)})`);
+  }
+  check((await window.locator('.tabs-container .tab.dirty').count()) > 0, `${side}: the tab shows unsaved changes`);
+
+  await window.keyboard.press('Control+S');
+  const saved = await waitFor(async () => disk(), (t) => t.includes('Last line. Edited\n**New** line'), 5000);
+  check(saved.includes('Last line. Edited\n**New** line'), `${side}: Ctrl+S saves the file (${JSON.stringify(saved.slice(-40))})`);
+  check((await waitFor(() => window.locator('.tabs-container .tab.dirty').count(), (n) => n === 0, 5000)) === 0, `${side}: the tab is clean after saving`);
+
+  // Ctrl+Z is VS Code's undo: it takes back the typing, step by step, until the file is as it was.
+  let presses = 0;
+  for (; presses < 30 && !(await lineTexts(frame)).includes('Last line.'); presses++) {
+    await window.keyboard.press('Control+Z');
+    await window.waitForTimeout(100);
+  }
+  const undone = await lineTexts(frame);
+  // As in the text editor: " Edited", Enter, "**New**", " line".
+  check(
+    presses === 4 && undone.includes('Last line.') && !undone.some((l) => l.includes('New')),
+    `${side}: Ctrl+Z undoes the typing a word at a time, in ${presses} steps (${JSON.stringify(undone.slice(-3))})`,
+  );
+  await window.keyboard.press('Control+Y');
+  const redone = await waitFor(() => lineTexts(frame), (l) => !l.includes('Last line.'), 3000);
+  check(!redone.includes('Last line.'), `${side}: Ctrl+Y redoes it (${JSON.stringify(redone.slice(-3))})`);
+
+  // Back to the starting text, saved.
+  await window.keyboard.press('Control+Z');
+  for (let i = 0; i < 30 && !(await lineTexts(frame)).includes('Last line.'); i++) {
+    await window.keyboard.press('Control+Z');
+    await window.waitForTimeout(100);
+  }
+  await window.keyboard.press('Control+S');
+  await waitFor(async () => disk(), (t) => t === after, 5000);
+  check(disk() === after, `${side}: the file is back as it was`);
+}
+
 /** Opens the change of note.md from the Source Control view. */
 async function openChange(window) {
   await window.waitForSelector('.monaco-workbench', { timeout: 30000 });
@@ -127,6 +204,7 @@ try {
   const padded = await waitFor(() => webviews(window), (v) => v.some((w) => w.side === 'original' && w.spacers > 0), 5000);
   check(padded.some((w) => w.side === 'original' && w.spacers > 0), 'side by side: the original is padded to line up with the modified side');
   if (process.env.SMOKE_SHOTS) await window.screenshot({ path: join(process.env.SMOKE_SHOTS, 'vscode-side-by-side.png') });
+  await checkEditing(window, 'modified');
 
   // VS Code's own "Toggle Inline View" reopens the diff in one webview.
   await runCommand(window, 'Toggle Inline View');
@@ -136,6 +214,7 @@ try {
   check(JSON.stringify(view?.deleted) === JSON.stringify(['An old paragraph to change.']), `inline: the deleted line is shown (${JSON.stringify(view?.deleted)})`);
   check(view?.changed.includes('## An added heading') ?? false, `inline: the added lines are marked (${JSON.stringify(view?.changed)})`);
   if (process.env.SMOKE_SHOTS) await window.screenshot({ path: join(process.env.SMOKE_SHOTS, 'vscode-inline.png') });
+  await checkEditing(window, 'inline');
   await runCommand(window, 'Toggle Inline View');
   await app.close();
 

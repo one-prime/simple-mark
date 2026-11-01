@@ -1,14 +1,16 @@
 // The webview side: a SimpleMark editor kept equal to the VS Code document. Typed changes go
-// to the host as line/character edits; changes from VS Code (undo, other editors, git) come
-// back as the whole text and are merged in as one minimal change, keeping the cursor.
+// to the host as line/character edits, grouped into undo steps as VS Code's text editor groups
+// them (./edit-groups.ts); changes from VS Code (undo, other editors, git) come back as the
+// whole text and are merged in as one minimal change, keeping the cursor.
 // In VS Code's diff editor, the same editor also shows the changes (see ./diff.ts).
 
 import { Annotation } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { createEditor } from '@simple-mark/codemirror';
-import type { DiffInit, Edit, HostMessage, WebviewMessage } from '../protocol';
+import type { DiffInit, HostMessage, WebviewMessage } from '../protocol';
 import { diffText, offsetToLineCh } from '../sync';
 import { inlineDiff, setOtherHeightsOf, setOtherText, sideBySideDiff } from './diff';
+import { EditGroups } from './edit-groups';
 import { vscodeChrome, vscodeTheme } from './theme';
 
 declare function acquireVsCodeApi(): { postMessage(message: WebviewMessage): void };
@@ -44,25 +46,46 @@ function imageResolver(baseUri: string | null, workspaceUri: string | null) {
   };
 }
 
-/** Sends each typed change to the host, one message per transaction, in order. */
+/** Typed changes, sent to the host one group (one undo step in VS Code) at a time, in order. */
+const groups = new EditGroups((edits) => {
+  pending++;
+  post({ type: 'edit', edits });
+});
+
+/** A group still being typed is sent after this pause. */
+const GROUP_PAUSE_MS = 500;
+let groupTimer = 0;
+
+/** Sends the typed changes not sent yet: before VS Code works with the document. */
+function sendTyped(): void {
+  clearTimeout(groupTimer);
+  groupTimer = 0;
+  groups.flush();
+}
+
 const sendEdits = EditorView.updateListener.of((update) => {
   for (const tr of update.transactions) {
-    if (!tr.docChanged || tr.annotation(fromHost)) continue;
-    const before = tr.startState.doc;
-    const edits: Edit[] = [];
-    tr.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
-      const from = before.lineAt(fromA);
-      const to = before.lineAt(toA);
-      edits.push({
-        from: { line: from.number - 1, ch: fromA - from.from },
-        to: { line: to.number - 1, ch: toA - to.from },
-        text: inserted.sliceString(0, inserted.length, tr.state.lineBreak),
-      });
-    });
-    pending++;
-    post({ type: 'edit', edits });
+    if (tr.docChanged && !tr.annotation(fromHost)) groups.add(tr);
+  }
+  if (update.docChanged) {
+    clearTimeout(groupTimer);
+    groupTimer = groups.waiting ? window.setTimeout(sendTyped, GROUP_PAUSE_MS) : 0;
   }
 });
+
+// VS Code acts on the document when a shortcut reaches it (Ctrl+Z, Ctrl+S, Ctrl+W, …) and
+// when the editor loses the focus (a menu, another editor). Send what was typed first; the
+// capture phase runs before VS Code's own key listener in this window.
+window.addEventListener(
+  'keydown',
+  (event) => {
+    if (event.ctrlKey || event.metaKey || event.altKey || /^F\d+$/.test(event.key)) sendTyped();
+  },
+  true,
+);
+window.addEventListener('blur', sendTyped);
+window.addEventListener('pagehide', sendTyped);
+document.addEventListener('visibilitychange', () => document.visibilityState === 'hidden' && sendTyped());
 
 /** The diff extensions, if this webview is part of VS Code's diff editor. */
 function diffExtensions(diff: DiffInit | undefined) {
@@ -139,8 +162,14 @@ window.addEventListener('message', (event: MessageEvent<HostMessage>) => {
       break;
     case 'update':
       // Our own edits are still on their way: this text may not have them yet.
+      sendTyped();
       if (pending > 0) stale = true;
       else reconcile(message.text);
+      break;
+    case 'flush':
+      // Everything typed goes out before this answer, so the host has it all once it arrives.
+      sendTyped();
+      post({ type: 'flushed', id: message.id });
       break;
     case 'diffOther':
       if (view) setOtherText(view, message.text);

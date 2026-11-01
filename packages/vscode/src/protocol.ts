@@ -45,6 +45,8 @@ export type HostMessage =
   | { type: 'update'; text: string }
   /** An `edit` was applied (`ok`) or refused. */
   | { type: 'ack'; ok: boolean }
+  /** Before a save: answer `flushed` once every typed change has been sent. */
+  | { type: 'flush'; id: number }
   /** In a diff: the document compared with changed (the other side, or the original). */
   | { type: 'diffOther'; text: string }
   /** Side by side: relayed from the other side's webview. */
@@ -71,5 +73,7 @@ export type WebviewMessage =
   | { type: 'edit'; edits: Edit[] }
   /** Asks for an `update` with the whole document, to catch up after a conflict. */
   | { type: 'requestText' }
+  /** The answer to `flush`: the edits sent before it are all the webview has. */
+  | { type: 'flushed'; id: number }
   /** Side by side: for the other side's webview. */
   | DiffRelay;

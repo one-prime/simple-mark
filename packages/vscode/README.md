@@ -77,9 +77,12 @@ in VS Code's diff colors.
 | Inline | One editor. Removed lines appear in red above the green lines that replaced them. |
 
 The layout follows your `diffEditor.renderSideBySide` setting. To switch, use **Toggle
-Inline View** in the editor title bar (or the Command Palette). The working-tree side stays
-editable; earlier versions from Git are read-only. Removed lines in the inline layout are
-shown as plain text, without Simple-Mark's styling.
+Inline View** in the editor title bar (or the Command Palette). Removed lines in the inline
+layout are shown as plain text, without Simple-Mark's styling.
+
+You can edit the working file in the diff, in either layout, as in the normal editor. The
+changes are marked again as you type. Ctrl+S saves, and Ctrl+Z / Ctrl+Y undo and redo a word
+at a time, as in VS Code's text editor. Earlier versions from Git are read-only.
 
 ### Allow the diff API
 

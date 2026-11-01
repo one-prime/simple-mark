@@ -192,6 +192,25 @@ class SimpleMarkEditorProvider implements vscode.CustomTextEditorProvider {
       post({ type: 'ack', ok });
     };
 
+    // A save (Ctrl+S reaches VS Code without passing the webview's messages) waits for the
+    // edits still on their way: the webview answers a flush after the last one it sent, then
+    // the queue is applied. Otherwise the last keystrokes missed the save.
+    let flushes = 0;
+    const flushed = new Map<number, () => void>();
+    const flush = () =>
+      new Promise<void>((resolve) => {
+        const id = ++flushes;
+        const done = () => {
+          clearTimeout(timer);
+          flushed.delete(id);
+          resolve();
+        };
+        // A webview that does not answer (still loading, gone) holds the save up no longer.
+        const timer = setTimeout(done, 1000);
+        flushed.set(id, done);
+        post({ type: 'flush', id });
+      }).then(() => queue);
+
     const compared = diff ? (diff.layout === 'inline' ? diff.original : diff.other) : null;
     const diffInit = (): DiffInit | undefined => {
       if (!diff) return undefined;
@@ -228,6 +247,9 @@ class SimpleMarkEditorProvider implements vscode.CustomTextEditorProvider {
           case 'openLink':
             void openLink(message.target, folder, workspace);
             break;
+          case 'flushed':
+            flushed.get(message.id)?.();
+            break;
           case 'diffHeights':
           case 'diffScroll':
             if (diff?.layout === 'sideBySide') diff.relay(message);
@@ -240,8 +262,14 @@ class SimpleMarkEditorProvider implements vscode.CustomTextEditorProvider {
         // The document compared with changed: typed on the other side, staged, or saved.
         if (compared && sameUri(event.document.uri, compared.uri)) post({ type: 'diffOther', text: compared.getText() });
       }),
+      vscode.workspace.onWillSaveTextDocument((event) => {
+        if (sameUri(event.document.uri, document.uri)) event.waitUntil(flush());
+      }),
     ];
-    panel.onDidDispose(() => subscriptions.forEach((s) => s.dispose()));
+    panel.onDidDispose(() => {
+      subscriptions.forEach((s) => s.dispose());
+      for (const done of flushed.values()) done();
+    });
     return post;
   }
 }

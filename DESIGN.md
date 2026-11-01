@@ -252,7 +252,17 @@ DrawLayout's editing overlay drifted 3–4 px below the canvas text further down
 - `CustomTextEditorProvider` + webview running the editor.
 - VS Code `TextDocument` is the source of truth; webview edits → `WorkspaceEdit`,
   external changes → pushed to webview.
-- VS Code owns undo/redo (CM6 history disabled in this host).
+- VS Code owns undo/redo (CM6 history disabled in this host). Each edit the host applies
+  is one undo step, so the webview groups typed changes as VS Code's text editor does
+  (`webview/edit-groups.ts`): a run of typing or deleting at the cursor is one edit. A new
+  group starts at a space after a word, a cursor move, or another kind of change (Enter,
+  paste, Tab). A group still being typed goes out after 500 ms, and before VS Code acts on
+  the document: on a key with Ctrl, Alt, Meta or F1–F12 (capture phase), blur, page hide,
+  an `update` from the host, and a `flush`. Without grouping, Ctrl+Z took back one character.
+- Save: Ctrl+S reaches VS Code by another route than the webview's edit messages, so a save
+  could miss the last keystrokes. In `onWillSaveTextDocument` the host sends `flush`. The
+  webview sends what is typed, then answers `flushed`, and the save waits for the host's edit
+  queue (at most 1 s if the webview does not answer).
 - Focus: VS Code gives a webview the focus back (Ctrl+1, switching tabs) by focusing its
   window only (`contentWindow.focus()` in its webview host page), so the body had it and
   typing went nowhere. On the window's `focus` the editor takes it, with its cursor where it
