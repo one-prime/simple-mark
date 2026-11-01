@@ -34,6 +34,8 @@ export const steadyScrollbar = ViewPlugin.fromClass(
     /** The scroll height held, from the top of the content; 0 for none. */
     private held = 0;
     private readonly holdKey = {};
+    /** Every listener, added in the constructor and removed in destroy. */
+    private readonly listeners: [EventTarget, string, (event: never) => void, AddEventListenerOptions?][];
 
     constructor(readonly view: EditorView) {
       this.reserve = document.createElement('div');
@@ -41,14 +43,19 @@ export const steadyScrollbar = ViewPlugin.fromClass(
       this.reserve.setAttribute('aria-hidden', 'true');
       this.reserve.style.cssText = 'position: absolute; top: 0; left: 0; width: 1px; height: 0; visibility: hidden; pointer-events: none';
       view.scrollDOM.appendChild(this.reserve);
-      view.scrollDOM.addEventListener('pointermove', this.onPointerMove);
-      view.scrollDOM.addEventListener('pointerleave', this.onPointerLeave);
-      view.scrollDOM.addEventListener('pointerdown', this.onPointerDown);
-      view.scrollDOM.addEventListener('scroll', this.onScroll, { passive: true });
-      // Chromium sends no pointer moves during a scrollbar drag, but the pointerup at its end.
-      window.addEventListener('pointerup', this.onDragEnd, true);
-      window.addEventListener('pointercancel', this.onDragEnd, true);
-      window.addEventListener('blur', this.onDragEnd);
+      const { scrollDOM } = view;
+      this.listeners = [
+        [scrollDOM, 'pointermove', (event: PointerEvent) => this.setPointer(this.onScrollbar(event), this.dragging)],
+        [scrollDOM, 'pointerleave', () => this.setPointer(false, this.dragging)],
+        [scrollDOM, 'pointerdown', (event: PointerEvent) => event.button === 0 && this.onScrollbar(event) && this.setPointer(true, true)],
+        [scrollDOM, 'scroll', () => this.holding && this.hold(), { passive: true }],
+        // Chromium sends no pointer moves during a scrollbar drag, but the pointerup at its end.
+        // The pointer may still be on the scrollbar then; its next move there holds again.
+        [window, 'pointerup', this.endDrag, { capture: true }],
+        [window, 'pointercancel', this.endDrag, { capture: true }],
+        [window, 'blur', this.endDrag],
+      ];
+      for (const [target, type, listener, options] of this.listeners) target.addEventListener(type, listener as EventListener, options);
     }
 
     private get holding(): boolean {
@@ -62,14 +69,7 @@ export const steadyScrollbar = ViewPlugin.fromClass(
     destroy(): void {
       if (this.holding) holdEstimates(this.view, false, false);
       this.reserve.remove();
-      const { scrollDOM } = this.view;
-      scrollDOM.removeEventListener('pointermove', this.onPointerMove);
-      scrollDOM.removeEventListener('pointerleave', this.onPointerLeave);
-      scrollDOM.removeEventListener('pointerdown', this.onPointerDown);
-      scrollDOM.removeEventListener('scroll', this.onScroll);
-      window.removeEventListener('pointerup', this.onDragEnd, true);
-      window.removeEventListener('pointercancel', this.onDragEnd, true);
-      window.removeEventListener('blur', this.onDragEnd);
+      for (const [target, type, listener, options] of this.listeners) target.removeEventListener(type, listener as EventListener, options);
     }
 
     /** Whether a pointer event is on the vertical scrollbar: right of the client area. */
@@ -77,9 +77,16 @@ export const steadyScrollbar = ViewPlugin.fromClass(
       return event.target === this.view.scrollDOM && event.offsetX >= this.view.scrollDOM.clientWidth;
     }
 
-    /** Starts or ends holding, after `over` or `dragging` changed. */
-    private changed(wasHolding: boolean): void {
-      if (this.holding === wasHolding) return;
+    private readonly endDrag = (): void => {
+      if (this.dragging) this.setPointer(false, false);
+    };
+
+    /** Sets where the pointer is and whether it drags; holding starts or ends with them. */
+    private setPointer(over: boolean, dragging: boolean): void {
+      const was = this.holding;
+      this.over = over;
+      this.dragging = dragging;
+      if (this.holding === was) return;
       if (this.holding) {
         holdEstimates(this.view, true);
         this.hold();
@@ -89,39 +96,6 @@ export const steadyScrollbar = ViewPlugin.fromClass(
         holdEstimates(this.view, false);
       }
     }
-
-    private readonly onPointerMove = (event: PointerEvent): void => {
-      const was = this.holding;
-      this.over = this.onScrollbar(event);
-      this.changed(was);
-    };
-
-    private readonly onPointerLeave = (): void => {
-      const was = this.holding;
-      this.over = false;
-      this.changed(was);
-    };
-
-    private readonly onPointerDown = (event: PointerEvent): void => {
-      if (event.button !== 0 || !this.onScrollbar(event)) return;
-      const was = this.holding;
-      this.dragging = true;
-      this.over = true;
-      this.changed(was);
-    };
-
-    private readonly onDragEnd = (): void => {
-      if (!this.dragging) return;
-      const was = this.holding;
-      this.dragging = false;
-      // The pointer may still be on the scrollbar; the next move there holds the height again.
-      this.over = false;
-      this.changed(was);
-    };
-
-    private readonly onScroll = (): void => {
-      if (this.holding) this.hold();
-    };
 
     /** The bottom of the content, from its top (the scroller is its offset parent). */
     private contentBottom(): number {

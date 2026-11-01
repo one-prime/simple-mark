@@ -1,14 +1,19 @@
 import { commonmarkLanguage, markdown } from '@codemirror/lang-markdown';
+import { ensureSyntaxTree } from '@codemirror/language';
 import { EditorState } from '@codemirror/state';
 import { markdownExtensions } from '@simple-mark/model';
 import { describe, expect, it } from 'vitest';
 import { blockPreviewSources, imageResolver, type ImageResolver } from '../src/previews';
 
 function sources(doc: string, resolve?: ImageResolver) {
-  const state = EditorState.create({
+  let state = EditorState.create({
     doc,
     extensions: [markdown({ base: commonmarkLanguage, extensions: markdownExtensions }), resolve ? imageResolver.of(resolve) : []],
   });
+  // A new state parses for 20 ms at most, and the first test of a cold run can take longer
+  // (the reference definition was then missing). Finish the parse, then take its tree.
+  ensureSyntaxTree(state, state.doc.length, 5000);
+  state = state.update({}).state;
   // Report each preview by the text of the line it follows.
   return blockPreviewSources(state).map((p) => ({ ...p, at: state.doc.lineAt(p.at).text }));
 }
