@@ -6,6 +6,10 @@
 // So: image sizes are read in the background as soon as a preview exists, formulas are
 // rendered in the background, drawn previews remember their measured height, and when
 // estimates improve the previews are refreshed (without redrawing those on screen).
+//
+// A refresh changes the document's height, and while the scrollbar thumb is dragged Chromium
+// drops the mouse movement at each change (see steady-scrollbar.ts). On a first visit images
+// and formulas arrive during the drag, so an editor can hold its refreshes meanwhile.
 
 import { StateEffect } from '@codemirror/state';
 import { ViewPlugin, type EditorView, type ViewUpdate } from '@codemirror/view';
@@ -54,6 +58,23 @@ function estimatesImproved(): void {
 
 /** Refreshes the previews so their widgets carry the current estimates. */
 export const refreshEstimates = StateEffect.define<null>();
+
+/** Editors holding their refreshes, and whether one is waiting. */
+const holding = new WeakMap<EditorView, boolean>();
+
+/**
+ * Holds `view`'s refreshes (`hold`), or lets them go: a refresh that came meanwhile is done
+ * now, unless `refresh` is false (the editor is going away). Call outside an editor update.
+ */
+export function holdEstimates(view: EditorView, hold: boolean, refresh = true): void {
+  if (hold) {
+    if (!holding.has(view)) holding.set(view, false);
+    return;
+  }
+  const waiting = holding.get(view);
+  holding.delete(view);
+  if (waiting && refresh) view.dispatch({ effects: refreshEstimates.of(null) });
+}
 
 /** Remembers the height of a drawn preview, as the estimate for when it is off screen. */
 export function rememberHeight(view: EditorView, key: string, dom: HTMLElement): void {
@@ -214,7 +235,8 @@ export const previewLayout = ViewPlugin.fromClass(
     }
 
     refresh = (): void => {
-      this.view.dispatch({ effects: refreshEstimates.of(null) });
+      if (holding.has(this.view)) holding.set(this.view, true);
+      else this.view.dispatch({ effects: refreshEstimates.of(null) });
     };
 
     measure(): void {

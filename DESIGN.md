@@ -132,6 +132,26 @@ editor's Tab binding, for tables and text alike.
   can change how neighboring blocks parse.
 - Line wrapping in CM6 (browser) vs DrawLayout's canvas (`wrapText`) can differ
   slightly; keep fonts and line height identical.
+- Scrollbar drags in Chromium (so VS Code) drop the mouse movement whenever the scroll
+  height changes, even by 1 px, and the thumb never catches up. A fast drag draws new lines
+  and previews, each measured a fraction of a pixel off its estimate: the thumb fell up to
+  120 px behind the mouse (10 of 76 moves dropped in the `?long` demo, 12 of 30 in VS Code).
+  `steady-scrollbar.ts` holds the scroll height (content + 100 px) while the pointer is on the
+  scrollbar. It is set when the pointer arrives, as a change at the press still lost the first
+  move. It grows in steps when the content passes it. It shrinks to the content only when its
+  blank space comes into view, at the end, where the thumb is at the bottom anyway. It goes
+  when the pointer leaves or the drag ends.
+- First visit: images get their sizes and formulas render in the background, and the height
+  swings by over 1,000 px in the first second (`?long`: 31,380 → 33,544 → 32,784). Held under
+  a fixed height, that left a screen of blank space at the end of the drag. So the editor
+  holds its estimate refreshes while the pointer is on the scrollbar (`holdEstimates` in
+  `preview-heights.ts`). One refresh comes when the hold ends, and CodeMirror keeps the text in
+  view where it is. Checked with images and MathJax delayed by up to 4 s, on `?long` and on a
+  document 8 times as long (640 images).
+- Headless Chromium ignores scrollbar drags. Tests drive a real window's scrollbar with
+  Playwright's mouse, which goes through Chromium's input like a hand. The VS Code end-to-end
+  test (`npm run e2e`) counts moves lost for good. A move that scrolled a frame late is made
+  up by the next one, so it does not count.
 
 ## Packages and hosts
 

@@ -8,6 +8,7 @@ import { markdownDecorations, markdownTheme } from './decorations';
 import { keepLineSeparator } from './line-separator';
 import { linkOpener, links, type LinkOpener } from './links';
 import { imageResolver, previews, type ImageResolver } from './previews';
+import { steadyScrollbar } from './steady-scrollbar';
 import { tabKey } from './tab-key';
 import { tableEditing } from './table-commands';
 
@@ -29,6 +30,7 @@ export function simpleMark(theme: Theme = defaultTheme): Extension {
     markdownDecorations,
     previews(),
     links(),
+    steadyScrollbar,
     EditorView.theme({
       '&': { color: theme.color },
       '.cm-scroller': { fontFamily: theme.fontFamily, lineHeight: '1.6' },

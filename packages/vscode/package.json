@@ -99,7 +99,7 @@
   "scripts": {
     "build": "node build.mjs && vite build",
     "smoke": "node test/webview-smoke.mjs",
-    "e2e": "node test/vscode-diff-e2e.mjs",
+    "e2e": "node test/vscode-e2e.mjs",
     "package": "npm run build && vsce package --no-dependencies"
   },
   "devDependencies": {

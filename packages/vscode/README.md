@@ -182,10 +182,12 @@ For the webview smoke check, first build the extension with
 The smoke check requires Chromium in Playwright's cache or a `CHROMIUM_PATH` environment
 variable pointing to a Chromium executable.
 
-To check the diff editor in a real VS Code, run `npm run e2e -w packages/vscode` after the
-build. It starts VS Code 1.143 or newer (`/usr/share/code/code`, or set `VSCODE_PATH`) with
-a temporary profile and Git repository. A VS Code window opens during the test. Set
-`SMOKE_SHOTS=<folder>` with either check to save screenshots.
+To check the extension in a real VS Code, run `npm run e2e -w packages/vscode` after the
+build. It checks the diff editor (both layouts, with editing) and a fast scrollbar drag
+through a long document. Headless browsers ignore scrollbar drags, so only a real window can
+test that. The test starts VS Code 1.143 or newer (`/usr/share/code/code`, or set
+`VSCODE_PATH`) with a temporary profile and Git repository. A VS Code window opens during the
+test. Set `SMOKE_SHOTS=<folder>` with either check to save screenshots.
 
 ## License
 

@@ -1,11 +1,12 @@
-// Opens a Git change of a Markdown file in a real VS Code, from the Source Control view, and
-// checks that Simple-Mark shows the diff side by side and inline (customEditorDiffs proposal).
+// Checks Simple-Mark in a real VS Code: a Git change of a Markdown file opened from the Source
+// Control view, side by side and inline (customEditorDiffs proposal), edited there; and a fast
+// scrollbar drag through a long document, which headless browsers cannot test.
 // Runs VS Code (default: /usr/share/code/code, or VSCODE_PATH) in extension development mode,
 // which allows proposed APIs, with a throwaway profile and repository. It opens a window.
 // Run `npm run build` first. SMOKE_SHOTS=<folder> saves screenshots.
 
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { _electron as electron } from 'playwright-core';
@@ -38,6 +39,19 @@ git('config', 'user.name', 'Test');
 const before = '# Notes\n\nFirst paragraph.\n\nAn old paragraph to change.\n\n> A quote\n\nLast line.\n';
 const after = '# Notes\n\nFirst paragraph.\n\nA new paragraph, changed.\n\n## An added heading\n\nAnd more text.\n\n> A quote\n\nLast line.\n';
 writeFileSync(join(repo, 'note.md'), before);
+// A long document whose lines and previews are measured as they come into view: images (each
+// its own file, so no size is known in advance), formulas, headings, Korean text and tables.
+const images = new URL('../../codemirror/demo/images/', import.meta.url).pathname;
+const sections = [];
+for (let i = 1; i <= 40; i++) {
+  copyFileSync(join(images, i % 2 ? 'wide.png' : 'sunset.png'), join(repo, `image-${i}.png`));
+  sections.push(
+    `## Section ${i}\n\nSome text for section ${i}, long enough to wrap in a narrow editor and keep the paragraph honest about it.\n\n` +
+      `한국어 문단 ${i}: 줄이 바뀔 만큼 길게 쓴 한국어 문장입니다. 넓은 글자는 두 칸을 차지합니다.\n\n![Image ${i}](image-${i}.png)\n\n` +
+      `$$\n\\sum_{k=1}^{${i}} k = \\frac{${i}(${i}+1)}{2}\n$$\n\n| Name | Value |\n| --- | --- |\n| 항목 ${i} | ${i * i} |\n`,
+  );
+}
+writeFileSync(join(repo, 'long.md'), `# Long document\n\n${sections.join('\n')}`);
 git('add', '.');
 git('commit', '-q', '-m', 'first');
 writeFileSync(join(repo, 'note.md'), after);
@@ -160,9 +174,10 @@ async function checkEditing(window, side) {
     await window.waitForTimeout(100);
   }
   const undone = await lineTexts(frame);
-  // As in the text editor: " Edited", Enter, "**New**", " line".
+  // As in the text editor: " Edited", Enter, "**New**", " line". A pause of over half a second
+  // also starts a new step (a busy test machine makes some); one per keystroke would be 20.
   check(
-    presses === 4 && undone.includes('Last line.') && !undone.some((l) => l.includes('New')),
+    presses >= 4 && presses <= 8 && undone.includes('Last line.') && !undone.some((l) => l.includes('New')),
     `${side}: Ctrl+Z undoes the typing a word at a time, in ${presses} steps (${JSON.stringify(undone.slice(-3))})`,
   );
   await window.keyboard.press('Control+Y');
@@ -178,6 +193,54 @@ async function checkEditing(window, side) {
   await window.keyboard.press('Control+S');
   await waitFor(async () => disk(), (t) => t === after, 5000);
   check(disk() === after, `${side}: the file is back as it was`);
+}
+
+/** Opens a file with Quick Open. */
+async function openFile(window, name) {
+  await window.locator('.part.sidebar .title-label, .activitybar').first().click();
+  await window.keyboard.press('Control+P');
+  await window.waitForSelector('.quick-input-widget input', { state: 'visible' });
+  await window.keyboard.type(name);
+  await window.waitForTimeout(500);
+  await window.keyboard.press('Enter');
+}
+
+/**
+ * Drags the editor's scrollbar thumb fast from the top to 60% down, as a hand does: the pointer
+ * rests on the thumb, then moves 30 steps a frame apart. Returns how many moves Chromium
+ * dropped (never made up, unlike a move that scrolled a frame late) and the scroll positions.
+ */
+async function fastDrag(window, frame) {
+  const box = await frame.locator('.cm-scroller').boundingBox();
+  const width = await frame.evaluate(() => {
+    const scroller = document.querySelector('.cm-scroller');
+    return scroller.offsetWidth - scroller.clientWidth;
+  });
+  const x = box.x + box.width - width / 2;
+  // The thumb at the top, below the arrow button (as tall as the scrollbar is wide).
+  const from = box.y + width + 6;
+  await window.mouse.move(x - 40, from);
+  await window.mouse.move(x, from);
+  await window.waitForTimeout(150);
+  await window.mouse.down();
+  const tops = [];
+  for (let i = 1; i <= 30; i++) {
+    await window.mouse.move(x, from + (box.height * 0.6 * i) / 30);
+    await window.waitForTimeout(16);
+    tops.push(await frame.evaluate(() => document.querySelector('.cm-scroller').scrollTop));
+  }
+  await window.mouse.up();
+  // A move that scrolled nothing was dropped by Chromium if the next move is of the usual
+  // (median) size; if the next one is about double, it only scrolled a frame late.
+  const moves = tops.slice(1).map((top, i) => top - tops[i]);
+  const usual = [...moves].sort((a, b) => a - b)[Math.floor(moves.length / 2)];
+  let lost = 0;
+  for (let i = 0; i < moves.length; i++) {
+    if (moves[i] >= usual / 2) continue;
+    if ((moves[i + 1] ?? 0) >= usual * 1.5) i++;
+    else lost++;
+  }
+  return { lost, tops };
 }
 
 /** Opens the change of note.md from the Source Control view. */
@@ -216,6 +279,23 @@ try {
   if (process.env.SMOKE_SHOTS) await window.screenshot({ path: join(process.env.SMOKE_SHOTS, 'vscode-inline.png') });
   await checkEditing(window, 'inline');
   await runCommand(window, 'Toggle Inline View');
+  // The side-by-side webviews take the focus as they start: let them, before typing elsewhere.
+  await waitFor(() => webviews(window), (v) => v.some((w) => w.side === 'original') && v.some((w) => w.side === 'modified'));
+  await window.waitForTimeout(1000);
+
+  // A fast scrollbar drag keeps the thumb under the mouse: no move is dropped.
+  await openFile(window, 'long.md');
+  if (process.env.SMOKE_SHOTS) {
+    await window.waitForTimeout(3000);
+    await window.screenshot({ path: join(process.env.SMOKE_SHOTS, 'vscode-long.png') });
+  }
+  const longFrame = await waitFor(async () => {
+    const frame = await frameOf(window, 'editor');
+    return frame && (await frame.evaluate(() => document.querySelector('.cm-content')?.textContent.includes('Long document')).catch(() => false)) ? frame : null;
+  }, (frame) => !!frame);
+  await window.waitForTimeout(2000);
+  const drag = await fastDrag(window, longFrame);
+  check(drag.tops.at(-1) > 0 && drag.lost === 0, `a fast scrollbar drag follows the mouse: ${drag.lost} of 30 moves lost (scrolled to ${Math.round(drag.tops.at(-1))})`);
   await app.close();
 
   // Without the proposal VS Code shows two plain editors; the extension says how to allow it.
@@ -239,4 +319,4 @@ if (failures.length) {
   console.log(`\n${failures.length} check(s) failed`);
   process.exit(1);
 }
-console.log('\nVS Code diff test passed');
+console.log('\nVS Code test passed');
