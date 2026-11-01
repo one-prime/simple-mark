@@ -32,6 +32,16 @@ describe('segmentHeights', () => {
   });
 });
 
+describe('segmentHeights at the document start', () => {
+  it('counts a spacer above the first line in the first non-empty segment', () => {
+    // "a\nb\n" after an insertion on the other side at the start: an empty gap and chunk here.
+    const bounds = [0, 0, 0, 2, 4, 5];
+    // A 30px spacer above line "a" belongs to its line block (top 0); "b" starts at 40.
+    const top = (pos: number) => (pos === 0 ? 0 : pos === 2 ? 40 : 50);
+    expect(segmentHeights(bounds, 4, top, 60, [{ pos: 0, height: 30 }])).toEqual([0, 0, 10, 10, 10]);
+  });
+});
+
 describe('placeSpacers', () => {
   it('pads below the segment, below the line before an empty one, or above the first line', () => {
     const bounds = [0, 0, 0, 2, 4, 7];

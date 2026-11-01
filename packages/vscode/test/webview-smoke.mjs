@@ -210,6 +210,7 @@ try {
   // Before a save the host asks for a flush: what was typed goes out before the answer.
   await page.keyboard.type('Z');
   await fromHost({ type: 'flush', id: 7 });
+  await eventually(() => page.evaluate(() => window.toHost.some((m) => m.type === 'flushed')), (answered) => answered);
   const beforeSave = await toHost();
   check(
     beforeSave.length === 2 && beforeSave[0].type === 'edit' && beforeSave[0].edits[0].text === 'Z' && beforeSave[1].type === 'flushed' && beforeSave[1].id === 7,
@@ -266,9 +267,9 @@ try {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
   })();
-  const init = (text, diff) => ({ type: 'init', text, eol: '\n', baseUri: `${origin}/docs/`, workspaceUri: null, readOnly: diff.side === 'original', indentUnit: '    ', tabSize: 4, diff });
-  await sides.original.evaluate((m) => window.postMessage(m, '*'), init(originalText + filler, { layout: 'sideBySide', side: 'original', other: modifiedText + filler }));
-  await sides.modified.evaluate((m) => window.postMessage(m, '*'), init(modifiedText + filler, { layout: 'sideBySide', side: 'modified', other: originalText + filler }));
+  const init = (text, diff) => ({ type: 'init', text, eol: '\n', baseUri: `${origin}/docs/`, workspaceUri: null, readOnly: diff.part === 'original', indentUnit: '    ', tabSize: 4, diff });
+  await sides.original.evaluate((m) => window.postMessage(m, '*'), init(originalText + filler, { part: 'original', other: modifiedText + filler }));
+  await sides.modified.evaluate((m) => window.postMessage(m, '*'), init(modifiedText + filler, { part: 'modified', other: originalText + filler }));
   for (const frame of Object.values(sides)) {
     await frame.waitForFunction(() => document.querySelector('.sm-image-preview img')?.naturalWidth > 0 && document.querySelector('.sm-math-preview svg'), null, { timeout: 15000 });
   }
@@ -317,7 +318,7 @@ try {
   inline.on('pageerror', (e) => errors.push(String(e)));
   await inline.goto(origin);
   await inline.waitForFunction(() => window.toHost.some((m) => m.type === 'ready'));
-  await inline.evaluate((m) => window.postMessage(m, '*'), init(modifiedText, { layout: 'inline', original: originalText }));
+  await inline.evaluate((m) => window.postMessage(m, '*'), init(modifiedText, { part: 'inline', other: originalText }));
   await inline.waitForSelector('.cm-deletedChunk');
   const deleted = await inline.evaluate(() => [...document.querySelectorAll('.cm-deletedChunk .cm-deletedLine')].map((l) => l.textContent));
   check(JSON.stringify(deleted) === JSON.stringify(['An old paragraph to change.']), `inline: the deleted line is shown (${JSON.stringify(deleted)})`);

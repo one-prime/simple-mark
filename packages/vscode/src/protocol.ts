@@ -14,15 +14,21 @@ export interface Edit {
   text: string;
 }
 
-/** Which document of a side-by-side diff a webview shows. */
-export type DiffSide = 'original' | 'modified';
+/**
+ * What a webview in VS Code's diff editor shows: one side of the side-by-side layout (the
+ * other side is in another webview), or the inline layout (the modified document, with the
+ * original's deleted lines drawn in it).
+ */
+export type DiffPart = 'original' | 'modified' | 'inline';
 
-/** How the webview shows a diff (the document it edits is the modified one when inline). */
-export type DiffInit =
-  /** One side of VS Code's side-by-side diff; the other side is in another webview. */
-  | { layout: 'sideBySide'; side: DiffSide; other: string }
-  /** VS Code's inline diff: the modified document, with the original's deleted lines in it. */
-  | { layout: 'inline'; original: string };
+/** A side of the side-by-side layout. */
+export type DiffSide = Exclude<DiffPart, 'inline'>;
+
+export interface DiffInit {
+  part: DiffPart;
+  /** The document compared with: the other side, or (inline) the original. */
+  other: string;
+}
 
 export type HostMessage =
   /** The document, sent once the webview is ready. */
@@ -47,7 +53,11 @@ export type HostMessage =
   | { type: 'ack'; ok: boolean }
   /** Before a save: answer `flushed` once every typed change has been sent. */
   | { type: 'flush'; id: number }
-  /** In a diff: the document compared with changed (the other side, or the original). */
+  | DiffMessage;
+
+/** The host's messages about a diff. */
+export type DiffMessage =
+  /** The document compared with changed: typed on the other side, staged, or saved. */
   | { type: 'diffOther'; text: string }
   /** Side by side: relayed from the other side's webview. */
   | DiffRelay;

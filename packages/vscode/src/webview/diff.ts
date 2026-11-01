@@ -1,4 +1,5 @@
-// Diff views in the editor webview, in VS Code's diff colors.
+// Diff views in the editor webview, in VS Code's diff colors. main.ts uses two functions:
+// `diffView` for the editor's extensions and `receiveDiffMessage` for the host's messages.
 //
 // Side by side: VS Code gives each side its own webview. Each side highlights its own changed
 // lines and text against the other document, and pads with spacers so both line up (see
@@ -6,18 +7,18 @@
 // Inline: one webview shows the modified document, with each deleted chunk of the original
 // drawn above the lines that replaced it (@codemirror/merge's unified view).
 
-import { Chunk, unifiedMergeView, updateOriginalDoc } from '@codemirror/merge';
-import { ChangeSet, EditorState, StateEffect, StateField, Text, type Extension, type Range } from '@codemirror/state';
+import { Chunk, getOriginalDoc, unifiedMergeView, updateOriginalDoc } from '@codemirror/merge';
+import { ChangeSet, EditorState, Facet, StateEffect, StateField, Text, type Extension, type Range } from '@codemirror/state';
 import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from '@codemirror/view';
 import { padding, placeSpacers, segmentBounds, segmentHeights, type SideRange, type Spacer } from '../diff-align';
-import type { DiffSide } from '../protocol';
+import type { DiffInit, DiffMessage, DiffPart, DiffRelay, DiffSide } from '../protocol';
 import { diffText } from '../sync';
 
 /** The same limits as @codemirror/merge's own views: very different texts fall back to a fast diff. */
 const diffConfig = { scanLimit: 500, timeout: 300 };
 
 /** A text in CodeMirror's form, whatever its line endings. */
-export const toText = (text: string) => Text.of(text.split(/\r\n|\r|\n/));
+const toText = (text: string) => Text.of(text.split(/\r\n|\r|\n/));
 
 const removedLine = 'var(--vscode-diffEditor-removedLineBackground, rgba(255, 0, 0, 0.2))';
 const insertedLine = 'var(--vscode-diffEditor-insertedLineBackground, rgba(155, 185, 85, 0.2))';
@@ -61,6 +62,14 @@ const diffTheme = EditorView.theme({
   '.cm-deletedLine': { whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
 });
 
+/** What this webview shows of the diff. */
+const diffPart = Facet.define<DiffPart, DiffPart | null>({ combine: (values) => values[0] ?? null });
+
+/** Sends a message for the other side's webview, through the host. */
+const sendToOtherSide = Facet.define<(message: DiffRelay) => void, (message: DiffRelay) => void>({
+  combine: (values) => values[0] ?? (() => {}),
+});
+
 // --- Side by side ----------------------------------------------------------------------------
 
 interface SideState {
@@ -77,7 +86,7 @@ const setOther = StateEffect.define<Text>();
 /** The other side measured its segments. */
 const setOtherHeights = StateEffect.define<readonly number[]>();
 
-const sideConfig = StateField.define<SideState | null>({
+const sideState = StateField.define<SideState | null>({
   create: () => null,
   update(value, tr) {
     if (!value) return value;
@@ -109,13 +118,13 @@ const changedLine = Decoration.line({ class: 'sm-diff-line' });
 const changedText = Decoration.mark({ class: 'sm-diff-text' });
 
 /** Changed lines, and the changed text within them. */
-const highlights = EditorView.decorations.compute([sideConfig, 'doc'], (state) => {
-  const config = state.field(sideConfig);
-  if (!config) return Decoration.none;
-  const original = config.side === 'original';
+const highlights = EditorView.decorations.compute([sideState, 'doc'], (state) => {
+  const side = state.field(sideState);
+  if (!side) return Decoration.none;
+  const original = side.side === 'original';
   const { doc } = state;
   const ranges: Range<Decoration>[] = [];
-  for (const chunk of config.chunks) {
+  for (const chunk of side.chunks) {
     const from = original ? chunk.fromA : chunk.fromB;
     const to = original ? chunk.toA : chunk.toB;
     if (from >= to) continue;
@@ -197,90 +206,112 @@ const sameSpacers = (a: readonly Spacer[], b: readonly Spacer[]) =>
  * Measures this side's segments after each change of text, layout or the other side's
  * heights; sends them when they change, and pads this side to the other's.
  */
-function aligner(onHeights: (heights: number[]) => void) {
-  return ViewPlugin.fromClass(
-    class {
-      sent: number[] | null = null;
-      frame = 0;
-      constructor(readonly view: EditorView) {
+const aligner = ViewPlugin.fromClass(
+  class {
+    sent: number[] | null = null;
+    frame = 0;
+    constructor(readonly view: EditorView) {
+      this.schedule();
+    }
+    update(update: ViewUpdate) {
+      if (
+        update.docChanged ||
+        update.geometryChanged ||
+        update.heightChanged ||
+        update.viewportChanged ||
+        update.state.field(sideState) !== update.startState.field(sideState)
+      ) {
         this.schedule();
       }
-      update(update: ViewUpdate) {
-        const config = update.state.field(sideConfig);
-        if (
-          update.docChanged ||
-          update.geometryChanged ||
-          update.heightChanged ||
-          update.viewportChanged ||
-          config !== update.startState.field(sideConfig)
-        ) {
-          this.schedule();
-        }
+    }
+    schedule() {
+      // In a frame of its own, as @codemirror/merge does: CodeMirror's measure phase may not
+      // dispatch, and the height map is up to date once an update has finished.
+      if (this.frame) return;
+      this.frame = requestAnimationFrame(() => {
+        this.frame = 0;
+        this.measure();
+      });
+    }
+    measure() {
+      const { view } = this;
+      const state = view.state.field(sideState);
+      if (!state) return;
+      const { doc } = view.state;
+      const bounds = segmentBounds(sideRanges(state), doc.length);
+      const placed = view.state.field(spacers).list;
+      const heights = segmentHeights(bounds, doc.length, (pos) => view.lineBlockAt(pos).top, view.lineBlockAt(doc.length).bottom, placed);
+      if (!sameList(this.sent, heights)) {
+        this.sent = heights;
+        view.state.facet(sendToOtherSide)({ type: 'diffHeights', heights });
       }
-      schedule() {
-        // In a frame of its own, as @codemirror/merge does: CodeMirror's measure phase may not
-        // dispatch, and the height map is up to date once an update has finished.
-        if (this.frame) return;
-        this.frame = requestAnimationFrame(() => {
-          this.frame = 0;
-          this.measure();
-        });
-      }
-      measure() {
-        const { view } = this;
-        const config = view.state.field(sideConfig);
-        if (!config) return;
-        const { doc } = view.state;
-        const bounds = segmentBounds(sideRanges(config), doc.length);
-        const placed = view.state.field(spacers).list;
-        const heights = segmentHeights(bounds, doc.length, (pos) => view.lineBlockAt(pos).top, view.lineBlockAt(doc.length).bottom, placed);
-        if (!sameList(this.sent, heights)) {
-          this.sent = heights;
-          onHeights(heights);
-        }
-        const wanted = placeSpacers(bounds, padding(heights, config.otherHeights));
-        if (!sameSpacers(placed, wanted)) view.dispatch({ effects: setSpacers.of(wanted) });
-      }
-      destroy() {
-        cancelAnimationFrame(this.frame);
-      }
-    },
-  );
-}
+      const wanted = placeSpacers(bounds, padding(heights, state.otherHeights));
+      if (!sameSpacers(placed, wanted)) view.dispatch({ effects: setSpacers.of(wanted) });
+    }
+    destroy() {
+      cancelAnimationFrame(this.frame);
+    }
+  },
+);
 
-export interface SideBySideOptions {
-  side: DiffSide;
-  other: string;
-  /** Sends this side's segment heights to the other side. */
-  onHeights: (heights: number[]) => void;
-}
+/** Both sides scroll together, as in VS Code's diff editor. */
+const scrollSync = ViewPlugin.fromClass(
+  class {
+    /** The position last set from the other side, so it is not sent back. */
+    setTo: number | null = null;
+    frame = 0;
+    readonly onScroll = () => {
+      const top = this.view.scrollDOM.scrollTop;
+      if (this.setTo !== null && Math.abs(top - this.setTo) < 1) return;
+      this.setTo = null;
+      // One message per frame is enough to follow.
+      if (this.frame) return;
+      this.frame = requestAnimationFrame(() => {
+        this.frame = 0;
+        this.view.state.facet(sendToOtherSide)({ type: 'diffScroll', top: this.view.scrollDOM.scrollTop });
+      });
+    };
+    constructor(readonly view: EditorView) {
+      view.scrollDOM.addEventListener('scroll', this.onScroll);
+    }
+    /** Scrolls to where the other side scrolled. */
+    scrollTo(top: number) {
+      if (Math.abs(this.view.scrollDOM.scrollTop - top) < 1) return;
+      this.setTo = top;
+      this.view.scrollDOM.scrollTop = top;
+    }
+    destroy() {
+      this.view.scrollDOM.removeEventListener('scroll', this.onScroll);
+      cancelAnimationFrame(this.frame);
+    }
+  },
+);
 
 /** One side of a side-by-side diff. */
-export function sideBySideDiff({ side, other, onHeights }: SideBySideOptions): Extension {
+function sideBySideDiff(side: DiffSide, other: string): Extension {
   return [
-    sideConfig.init((state: EditorState) => {
+    sideState.init((state: EditorState) => {
       const otherDoc = toText(other);
       const chunks = side === 'original' ? Chunk.build(state.doc, otherDoc, diffConfig) : Chunk.build(otherDoc, state.doc, diffConfig);
       return { side, other: otherDoc, chunks, otherHeights: null };
     }),
     highlights,
     spacers,
-    aligner(onHeights),
-    EditorView.editorAttributes.of({ class: `sm-diff-${side}` }),
-    diffTheme,
+    aligner,
+    scrollSync,
   ];
 }
 
-/** Shows the other side's new text (side by side) or the original's (inline). */
-export function setOtherText(view: EditorView, text: string): void {
-  const config = view.state.field(sideConfig, false);
-  if (config) {
-    view.dispatch({ effects: setOther.of(toText(text)) });
-    return;
-  }
-  // Inline: the unified view takes the original's change as a change set.
-  const original = getOriginal(view.state);
-  if (!original) return;
+// --- Inline ----------------------------------------------------------------------------------
+
+/** The modified document with the original's deleted lines drawn above their replacements. */
+function inlineDiff(original: string): Extension {
+  return unifiedMergeView({ original: toText(original), mergeControls: false, gutter: false, highlightChanges: true, syntaxHighlightDeletions: true, diffConfig });
+}
+
+/** The original changed: the unified view takes the change as a change set. */
+function updateInlineOriginal(view: EditorView, text: string): void {
+  const original = getOriginalDoc(view.state);
   const next = toText(text);
   const change = diffText(original.toString(), next.toString());
   if (!change) return;
@@ -288,33 +319,33 @@ export function setOtherText(view: EditorView, text: string): void {
   view.dispatch({ effects: updateOriginalDoc.of({ doc: next, changes }) });
 }
 
-/** The other side's measured heights arrived. */
-export function setOtherHeightsOf(view: EditorView, heights: readonly number[]): void {
-  if (view.state.field(sideConfig, false)) view.dispatch({ effects: setOtherHeights.of(heights) });
-}
+// --- For main.ts -----------------------------------------------------------------------------
 
-// --- Inline ----------------------------------------------------------------------------------
-
-/** The original document of an inline diff, kept beside the unified view's own copy. */
-const inlineOriginal = StateField.define<Text | null>({
-  create: () => null,
-  update(value, tr) {
-    for (const effect of tr.effects) if (effect.is(updateOriginalDoc)) value = effect.value.doc;
-    return value;
-  },
-});
-
-function getOriginal(state: EditorState): Text | null {
-  return state.field(inlineOriginal, false) ?? null;
-}
-
-/** The modified document with the original's deleted lines drawn above their replacements. */
-export function inlineDiff(original: string): Extension {
-  const doc = toText(original);
+/** The editor extensions for a webview in VS Code's diff editor. `send` goes to the host. */
+export function diffView({ part, other }: DiffInit, send: (message: DiffRelay) => void): Extension {
   return [
-    inlineOriginal.init(() => doc),
-    unifiedMergeView({ original: doc, mergeControls: false, gutter: false, highlightChanges: true, syntaxHighlightDeletions: true, diffConfig }),
-    EditorView.editorAttributes.of({ class: 'sm-diff-inline' }),
+    diffPart.of(part),
+    sendToOtherSide.of(send),
+    part === 'inline' ? inlineDiff(other) : sideBySideDiff(part, other),
+    EditorView.editorAttributes.of({ class: `sm-diff-${part}` }),
     diffTheme,
   ];
+}
+
+/** Handles the host's message about the diff. */
+export function receiveDiffMessage(view: EditorView, message: DiffMessage): void {
+  const part = view.state.facet(diffPart);
+  if (!part) return;
+  switch (message.type) {
+    case 'diffOther':
+      if (part === 'inline') updateInlineOriginal(view, message.text);
+      else view.dispatch({ effects: setOther.of(toText(message.text)) });
+      break;
+    case 'diffHeights':
+      if (part !== 'inline') view.dispatch({ effects: setOtherHeights.of(message.heights) });
+      break;
+    case 'diffScroll':
+      view.plugin(scrollSync)?.scrollTo(message.top);
+      break;
+  }
 }

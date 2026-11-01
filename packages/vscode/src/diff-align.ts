@@ -35,10 +35,19 @@ export interface Spacer {
   chunk: boolean;
 }
 
-/** The non-empty segment holding `pos` (a position inside a line or at its end). */
+/**
+ * The non-empty segment holding `pos` (a position inside a line or at its end): the last
+ * segment starting at or before it. A binary search, as the bounds are in order.
+ */
 function segmentAt(bounds: readonly number[], pos: number): number {
-  for (let k = bounds.length - 2; k >= 0; k--) if (bounds[k]! <= pos && bounds[k + 1]! > pos) return k;
-  return 0;
+  let low = 0;
+  let high = bounds.length - 2;
+  while (low < high) {
+    const mid = (low + high + 1) >> 1;
+    if (bounds[mid]! <= pos) low = mid;
+    else high = mid - 1;
+  }
+  return low;
 }
 
 /**
