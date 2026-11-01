@@ -65,6 +65,51 @@ To keep the plain text editor as your default instead, add to your settings:
 }
 ```
 
+## Git changes in the diff editor
+
+Simple-Mark also shows Markdown diffs: a change in the Source Control view, **Open Changes**,
+the Timeline, or **Compare Selected**. The diff opens in Simple-Mark with the changes marked
+in VS Code's diff colors.
+
+| Layout | What you see |
+| --- | --- |
+| Side by side | The old version on the left, the new on the right. Removed lines are red, added lines green, changed words darker. Hatched space fills in for lines that only the other side has, so both sides line up and scroll together. |
+| Inline | One editor. Removed lines appear in red above the green lines that replaced them. |
+
+The layout follows your `diffEditor.renderSideBySide` setting. To switch, use **Toggle
+Inline View** in the editor title bar (or the Command Palette). The working-tree side stays
+editable; earlier versions from Git are read-only. Removed lines in the inline layout are
+shown as plain text, without Simple-Mark's styling.
+
+### Allow the diff API
+
+This feature uses `customEditorDiffs`, a proposed VS Code API (VS Code 1.143 or newer).
+Stable VS Code allows proposed APIs only for extensions that you name:
+
+1. Run **Preferences: Configure Runtime Arguments**. This opens `argv.json`.
+2. Add this entry:
+
+   ```json
+   "enable-proposed-api": ["Simple-Mark.simple-mark"]
+   ```
+
+3. Quit VS Code completely and start it again.
+
+You can also start VS Code with `code --enable-proposed-api Simple-Mark.simple-mark`.
+Without this permission, a diff shows two plain Simple-Mark editors with no changes marked.
+Simple-Mark then shows a notification once with these steps.
+
+To keep VS Code's text diff for Markdown, add to your settings:
+
+```json
+{
+  "workbench.diffEditorAssociations": {
+    "*.md": "default",
+    "*.markdown": "default"
+  }
+}
+```
+
 ## Korean, Chinese and Japanese text in tables
 
 Tables are padded counting each Korean, Chinese or Japanese character as two columns
@@ -133,6 +178,11 @@ For the webview smoke check, first build the extension with
 `npm run build -w packages/vscode`, then run `npm run smoke -w packages/vscode`.
 The smoke check requires Chromium in Playwright's cache or a `CHROMIUM_PATH` environment
 variable pointing to a Chromium executable.
+
+To check the diff editor in a real VS Code, run `npm run e2e -w packages/vscode` after the
+build. It starts VS Code 1.143 or newer (`/usr/share/code/code`, or set `VSCODE_PATH`) with
+a temporary profile and Git repository. A VS Code window opens during the test. Set
+`SMOKE_SHOTS=<folder>` with either check to save screenshots.
 
 ## License
 

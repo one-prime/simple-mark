@@ -4,5 +4,5 @@
     "lib": ["ES2022"],
     "types": ["node", "vscode"]
   },
-  "include": ["src/extension.ts", "src/html.ts", "src/protocol.ts", "src/sync.ts"]
+  "include": ["src/extension.ts", "src/html.ts", "src/protocol.ts", "src/sync.ts", "src/vscode.proposed.customEditorDiffs.d.ts"]
 }

@@ -4,14 +4,21 @@
 
 import * as vscode from 'vscode';
 import { makeNonce, webviewHtml } from './html';
-import type { HostMessage, LinkTarget, WebviewMessage } from './protocol';
+import type { DiffInit, DiffRelay, DiffSide, HostMessage, LinkTarget, WebviewMessage } from './protocol';
 import { linkPath } from './sync';
 
 const VIEW_TYPE = 'simple-mark.editor';
 
+/** The extension's ID, as `--enable-proposed-api` and argv.json name it. */
+const EXTENSION_ID = 'Simple-Mark.simple-mark';
+
 export function activate(context: vscode.ExtensionContext): void {
+  // VS Code clears the proposals an extension may not use (stable VS Code allows them only to
+  // extensions named by --enable-proposed-api or in argv.json). Without customEditorDiffs, a
+  // diff shows two plain Simple-Mark editors, so say once how to get the real diff.
+  const diffs = (context.extension.packageJSON as { enabledApiProposals?: string[] }).enabledApiProposals?.includes('customEditorDiffs') ?? false;
   context.subscriptions.push(
-    vscode.window.registerCustomEditorProvider(VIEW_TYPE, new SimpleMarkEditorProvider(context.extensionUri), {
+    vscode.window.registerCustomEditorProvider(VIEW_TYPE, new SimpleMarkEditorProvider(context.extensionUri, diffs ? null : diffHint()), {
       webviewOptions: { retainContextWhenHidden: true },
       supportsMultipleEditorsPerDocument: true,
     }),
@@ -70,20 +77,92 @@ async function openLink(target: LinkTarget, folder: vscode.Uri | null, workspace
   await vscode.commands.executeCommand('vscode.open', uri);
 }
 
+/** Explains, once per session, how to see diffs with their changes marked. */
+function diffHint(): () => void {
+  let shown = false;
+  return () => {
+    if (shown) return;
+    shown = true;
+    const open = 'Open argv.json';
+    void vscode.window
+      .showInformationMessage(
+        `Simple-Mark marks the changes in a diff only with VS Code's proposed customEditorDiffs API. To allow it, add "enable-proposed-api": ["${EXTENSION_ID}"] to argv.json and restart VS Code.`,
+        open,
+      )
+      .then((choice) => {
+        if (choice === open) void vscode.commands.executeCommand('workbench.action.configureRuntimeArguments');
+      });
+  };
+}
+
 function activeCustomEditorUri(): vscode.Uri | undefined {
   const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
   return input instanceof vscode.TabInputCustom ? input.uri : undefined;
 }
 
+/** What a webview in a diff compares its document with. */
+type DiffBinding =
+  | { layout: 'sideBySide'; side: DiffSide; other: vscode.TextDocument; relay: (message: DiffRelay) => void }
+  | { layout: 'inline'; original: vscode.TextDocument };
+
+const sameUri = (a: vscode.Uri, b: vscode.Uri) => a.toString() === b.toString();
+
 class SimpleMarkEditorProvider implements vscode.CustomTextEditorProvider {
-  constructor(private readonly extensionUri: vscode.Uri) {}
+  constructor(
+    private readonly extensionUri: vscode.Uri,
+    /** Without the diff API: called when a document that is likely a diff's side opens. */
+    private readonly onPlainDiff: (() => void) | null,
+  ) {}
 
   resolveCustomTextEditor(document: vscode.TextDocument, panel: vscode.WebviewPanel): void {
+    // Git's earlier versions (git: documents) open in an editor mostly as a diff's left side.
+    if (this.onPlainDiff && document.uri.scheme === 'git') this.onPlainDiff();
+    this.bind(document, panel);
+  }
+
+  // VS Code's diff editor (customEditorDiffs API proposal). VS Code picks the layout from the
+  // user's diffEditor.renderSideBySide and offers "Toggle Inline View", which reopens the diff
+  // in the other layout.
+
+  /** Side by side: each document in its own webview, which line up and scroll together. */
+  resolveCustomTextEditorSideBySideDiff(
+    documents: vscode.CustomEditorDiffDocuments<vscode.TextDocument>,
+    panels: vscode.CustomEditorSideBySideDiffWebviewPanels,
+  ): void {
+    // Each side's messages for the other go through here; one that is gone gets none.
+    const sides: { original?: (m: HostMessage) => void; modified?: (m: HostMessage) => void } = {};
+    sides.original = this.bind(documents.original, panels.original, {
+      layout: 'sideBySide',
+      side: 'original',
+      other: documents.modified,
+      relay: (message) => sides.modified?.(message),
+    });
+    sides.modified = this.bind(documents.modified, panels.modified, {
+      layout: 'sideBySide',
+      side: 'modified',
+      other: documents.original,
+      relay: (message) => sides.original?.(message),
+    });
+    panels.original.onDidDispose(() => (sides.original = undefined));
+    panels.modified.onDidDispose(() => (sides.modified = undefined));
+  }
+
+  /** Inline: the modified document, with the original's deleted lines drawn in it. */
+  resolveCustomTextEditorInlineDiff(documents: vscode.CustomEditorDiffDocuments<vscode.TextDocument>, panel: vscode.WebviewPanel): void {
+    this.bind(documents.modified, panel, { layout: 'inline', original: documents.original });
+  }
+
+  /**
+   * Shows `document` in `panel` and keeps the two equal; with `diff`, also the changes against
+   * the other document. Returns how to send the webview a message.
+   */
+  private bind(document: vscode.TextDocument, panel: vscode.WebviewPanel, diff?: DiffBinding): (message: HostMessage) => void {
     const { webview } = panel;
     const dist = vscode.Uri.joinPath(this.extensionUri, 'dist');
-    // Images may come from the document's folder and the workspace; nothing else on disk.
-    const folder = document.uri.scheme === 'untitled' ? null : vscode.Uri.joinPath(document.uri, '..');
-    const workspace = vscode.workspace.getWorkspaceFolder(document.uri)?.uri;
+    // Images may come from the document's folder and the workspace; nothing else on disk. A
+    // diff's original side is a git: (or other virtual) document; its images are the file's.
+    const folder = document.uri.scheme === 'untitled' ? null : vscode.Uri.joinPath(fileUriOf(document.uri), '..');
+    const workspace = vscode.workspace.getWorkspaceFolder(fileUriOf(document.uri))?.uri;
     webview.options = {
       enableScripts: true,
       localResourceRoots: [dist, ...(folder ? [folder] : []), ...(workspace ? [workspace] : [])],
@@ -113,6 +192,14 @@ class SimpleMarkEditorProvider implements vscode.CustomTextEditorProvider {
       post({ type: 'ack', ok });
     };
 
+    const compared = diff ? (diff.layout === 'inline' ? diff.original : diff.other) : null;
+    const diffInit = (): DiffInit | undefined => {
+      if (!diff) return undefined;
+      return diff.layout === 'inline'
+        ? { layout: 'inline', original: diff.original.getText() }
+        : { layout: 'sideBySide', side: diff.side, other: diff.other.getText() };
+    };
+
     const subscriptions = [
       webview.onDidReceiveMessage((message: WebviewMessage) => {
         switch (message.type) {
@@ -128,6 +215,7 @@ class SimpleMarkEditorProvider implements vscode.CustomTextEditorProvider {
               readOnly: vscode.workspace.fs.isWritableFileSystem(document.uri.scheme) === false,
               indentUnit: editor.get<boolean>('insertSpaces', true) ? ' '.repeat(tabSize) : '\t',
               tabSize,
+              diff: diffInit(),
             });
             break;
           }
@@ -140,13 +228,35 @@ class SimpleMarkEditorProvider implements vscode.CustomTextEditorProvider {
           case 'openLink':
             void openLink(message.target, folder, workspace);
             break;
+          case 'diffHeights':
+          case 'diffScroll':
+            if (diff?.layout === 'sideBySide') diff.relay(message);
+            break;
         }
       }),
       vscode.workspace.onDidChangeTextDocument((event) => {
-        if (event.document.uri.toString() !== document.uri.toString() || !event.contentChanges.length || applying > 0) return;
-        post({ type: 'update', text: document.getText() });
+        if (!event.contentChanges.length) return;
+        if (sameUri(event.document.uri, document.uri) && applying === 0) post({ type: 'update', text: document.getText() });
+        // The document compared with changed: typed on the other side, staged, or saved.
+        if (compared && sameUri(event.document.uri, compared.uri)) post({ type: 'diffOther', text: compared.getText() });
       }),
     ];
     panel.onDidDispose(() => subscriptions.forEach((s) => s.dispose()));
+    return post;
   }
+}
+
+/**
+ * The file a document is a version of: itself, or for Git's git: documents (the original side
+ * of a diff), the file in the working tree, which its query names.
+ */
+function fileUriOf(uri: vscode.Uri): vscode.Uri {
+  if (uri.scheme !== 'git' || !uri.query) return uri;
+  try {
+    const { path } = JSON.parse(uri.query) as { path?: unknown };
+    if (typeof path === 'string' && path) return uri.with({ scheme: 'file', path, query: '' });
+  } catch {
+    // Not Git's JSON query: use the path as it is.
+  }
+  return uri.with({ scheme: 'file', query: '' });
 }

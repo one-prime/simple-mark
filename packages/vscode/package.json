@@ -3,7 +3,7 @@
   "displayName": "Simple-Mark",
   "icon": "icon.png",
   "description": "Edit Markdown with its formatting shown and none of its syntax hidden.",
-  "version": "0.1.6",
+  "version": "0.2.0",
   "publisher": "Simple-Mark",
   "license": "MIT",
   "repository": {
@@ -27,6 +27,9 @@
     "table"
   ],
   "main": "./dist/extension.cjs",
+  "enabledApiProposals": [
+    "customEditorDiffs"
+  ],
   "activationEvents": [],
   "contributes": {
     "customEditors": [
@@ -41,7 +44,10 @@
             "filenamePattern": "*.markdown"
           }
         ],
-        "priority": "default"
+        "priority": {
+          "textEditor": "default",
+          "diffEditor": "default"
+        }
       }
     ],
     "commands": [
@@ -93,9 +99,11 @@
   "scripts": {
     "build": "node build.mjs && vite build",
     "smoke": "node test/webview-smoke.mjs",
+    "e2e": "node test/vscode-diff-e2e.mjs",
     "package": "npm run build && vsce package --no-dependencies"
   },
   "devDependencies": {
+    "@codemirror/merge": "^6.12.3",
     "@codemirror/state": "^6.7.6",
     "@codemirror/view": "^6.43.15",
     "@simple-mark/codemirror": "*",

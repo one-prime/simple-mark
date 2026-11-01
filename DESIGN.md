@@ -267,8 +267,42 @@ DrawLayout's editing overlay drifted 3–4 px below the canvas text further down
   change (never splitting `\r\n` or surrogate pairs).
 - Layout for a later repo split: `src/extension.ts` (host, esbuild → CJS),
   `src/webview/` (Vite, lazy MathJax chunks), `src/html.ts` / `protocol.ts` /
-  `sync.ts` (no VS Code or DOM, shared and testable). Its only tie to this repo
-  is the `@simple-mark/codemirror` / `@simple-mark/model` dependency.
+  `sync.ts` / `diff-align.ts` (no VS Code or DOM, shared and testable). Its only tie
+  to this repo is the `@simple-mark/codemirror` / `@simple-mark/model` dependency.
+
+#### Diff editor
+
+VS Code 1.143 has a proposed API, `customEditorDiffs`. With it, a custom text editor can
+render VS Code's own diff editor. The manifest asks for diffs with
+`"priority": { "textEditor": "default", "diffEditor": "default" }`. VS Code picks the layout
+from `diffEditor.renderSideBySide`. Its **Toggle Inline View** reopens the diff in the other
+layout (context key `activeCustomEditorDiffCanToggleLayout`).
+
+| Layout | VS Code calls | Webview |
+| --- | --- | --- |
+| Side by side | `resolveCustomTextEditorSideBySideDiff`, two panels | Each side marks its own lines against the other text (`Chunk.build` from `@codemirror/merge`). |
+| Inline | `resolveCustomTextEditorInlineDiff`, one panel | The modified document with `unifiedMergeView`: deleted chunks as widgets above their replacement. |
+
+- Both documents are live `TextDocument`s. Each panel is bound like a normal editor (edits,
+  undo, read-only for `git:`). A change of the compared document arrives as `diffOther`.
+- Alignment (`diff-align.ts`): each side cuts its document into gap, chunk, gap, …, gap and
+  sends the drawn height of each segment, through the host, to the other side. A side pads a
+  shorter segment with a block widget below its last line, hatched for chunks. The heights
+  leave out the side's own spacers, so the exchange settles after one round. Images and math
+  make line heights differ, so line counts alone would not line up.
+- The measuring runs in its own animation frame, as in `@codemirror/merge`: CodeMirror's
+  measure phase may not dispatch.
+- Scroll sync: with the segments equally tall, both sides scroll to the same `scrollTop`. A
+  position set from the other side is not sent back.
+- Diff colors are VS Code's (`--vscode-diffEditor-*`). Lines draw their own backgrounds and
+  borders with style attributes (code, quotes, h1/h2 borders as inset shadows). So the diff
+  color is a `::before` layer with `z-index: -1` in the line's own stacking context, above
+  the line's background and below its text.
+- Stable VS Code clears proposals unless the extension is named by `--enable-proposed-api` or
+  `argv.json` (extension development mode is not enough). Then `enabledApiProposals` in
+  `packageJSON` is empty, VS Code shows two plain editors, and the extension shows a hint
+  once. Tests: `npm run smoke` (two webviews and a relay in Chromium), `npm run e2e` (real
+  VS Code, Source Control click, both layouts and the fallback).
 
 ### DrawLayout (Markdown text)
 
