@@ -8,7 +8,7 @@
   ],
   "scripts": {
     "dev": "npm run dev -w @simple-mark/codemirror",
-    "typecheck": "tsc -p packages/model/tsconfig.json && tsc -p packages/math/tsconfig.json && tsc -p packages/highlight/tsconfig.json && tsc -p packages/canvas/tsconfig.json && tsc -p tsconfig.json && tsc -p tsconfig.test.json",
+    "typecheck": "tsc -p packages/model/tsconfig.json && tsc -p packages/math/tsconfig.json && tsc -p packages/highlight/tsconfig.json && tsc -p packages/canvas/tsconfig.json && tsc -p tsconfig.json && tsc -p packages/vscode/tsconfig.json && tsc -p packages/vscode/tsconfig.webview.json && tsc -p tsconfig.test.json",
     "test": "vitest run",
     "release": "node scripts/release.mjs"
   },

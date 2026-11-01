@@ -15,8 +15,9 @@ const view = createEditor(document.getElementById('editor')!, {
 });
 ```
 
-- **Tab** indents to the next four-space tab stop, or indents selected lines; Shift-Tab
-  outdents; Ctrl-M lets Tab move the focus instead.
+- **Tab** indents as in VS Code's text editor (spaces to the next tab stop, or the selected
+  lines; `indentUnit` and `tabSize` options); Shift-Tab outdents; Ctrl-M lets Tab move the
+  focus instead.
 - **Tables**: Tab / Shift-Tab move between cells, Enter adds a row; each re-aligns the
   table. Korean, Chinese and Japanese line up (drawn exactly two columns wide), and typing
   them with an IME is safe.
@@ -32,11 +33,6 @@ const view = createEditor(document.getElementById('editor')!, {
   new browser tab). A click on an image preview opens the image.
 - **Line endings** are kept (`\r\n`, `\r`), so an unedited file saves back byte for byte.
 - Accurate scroll heights for documents with many images and formulas.
-- Undo/redo is enabled for each editing session.
-
-`createEditor` supports the browser demo and DrawLayout. Its options are `doc`, `theme`,
-`resolveImage`, `openLink`, `onChange(text)`, and `extensions`. DrawLayout uses `extensions`
-for its commit/cancel keys, focus handling, and canvas styling. Call `refreshImages(view)`
-when project images finish loading.
+- `simpleMark(theme)` gives the extensions for your own `EditorState`.
 
 MIT. Values copied from other projects are credited in `THIRD_PARTY_NOTICES.txt`.
