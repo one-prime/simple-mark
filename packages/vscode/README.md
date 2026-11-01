@@ -1,92 +1,39 @@
 # Simple-Mark for VS Code
 
-Edit Markdown with its formatting shown — and none of its syntax hidden.
+**Markdown that looks like the result, with its syntax still in place.**
 
-`# Heading` stays `# Heading`: the `#` is dimmed and the heading is large. `**bold**` keeps
-its `**`. Markdown stays editable text, and an unedited document keeps its original line
-endings. Table navigation can reformat table spacing as described below.
+`# Heading` keeps its `#` and appears large. `**bold**` keeps its stars and appears bold.
+Formulas and images render next to their source. The file stays plain Markdown, and an
+unedited document keeps its original line endings.
 
-## Installation
+![Simple-Mark in VS Code: a styled heading and paragraph, an inline formula with its rendered tooltip, a display formula rendered below its source, and an image preview](images/editor.png)
 
-Requires **VS Code 1.100.0 or newer**.
+## See your changes in a diff
 
-### From the Marketplace
+Click a changed Markdown file in **Source Control**. VS Code's diff editor opens in
+Simple-Mark: both versions keep their formatting, formulas and images, and the changes are
+marked in VS Code's diff colors. The same view opens for **Open Changes**, the Timeline and
+**Compare Selected**.
 
-Open Extensions in VS Code and search for `@id:Simple-Mark.simple-mark`, or visit the
-[Simple-Mark Marketplace listing](https://marketplace.visualstudio.com/items?itemName=Simple-Mark.simple-mark).
-Select **Install**, then open a Markdown file.
-
-### From a VSIX file
-
-If you have a `simple-mark-<version>.vsix` file, open the Command Palette, run
-**Extensions: Install from VSIX…**, and select it. To build a VSIX yourself, see
-[Building from source](#building-from-source).
-
-## Features
-
-- Headings, emphasis, code, quotes, lists and links styled in place, markers dimmed.
-- **Tab** indents as in VS Code's text editor, by your `editor.tabSize` and
-  `editor.insertSpaces` for Markdown; Shift+Tab outdents. Ctrl+M switches Tab to moving the
-  focus.
-- **Tables**: Tab / Shift-Tab move between cells, Enter adds a row; each re-aligns the
-  table. Korean and other wide characters line up.
-- **Math**: `$inline$` shows a rendered tooltip, `$$` blocks render below their source
-  (MathJax). The TeX is colored: commands, brackets in your bracket pair colors, an unmatched
-  brace in red.
-- **Code blocks** are colored by their language, as in VS Code's Markdown preview
-  (highlight.js, 190+ languages).
-- **Images** preview below their line; paths are relative to the document (see Links for
-  paths starting with `/`).
-- **Links**: Ctrl+Click (⌘+Click on macOS) opens a link: web pages in your browser (VS Code
-  asks first), `#heading` links jump within the document, and paths open in VS Code — images
-  in its image viewer, Markdown files in Simple-Mark. Paths are relative to the document. A
-  path starting with `/` is an absolute path on disk, or else relative to the workspace folder
-  (as in VS Code's own Markdown preview); images are found the same way. Click an image
-  preview to open the image.
-- Follows your color theme, styled like VS Code's Markdown preview. Saving, undo/redo and git work as with any text editor.
-
-## Usage
-
-Simple-Mark is the default editor for `.md` and `.markdown` files: open one and it opens in
-Simple-Mark.
-
-- **Open as Text** in the editor title bar (or **Reopen Editor With… → Text Editor**)
-  shows the plain text.
-- **Open with Simple-Mark** in the title bar or the Explorer context menu switches back.
-
-To keep the plain text editor as your default instead, add to your settings:
-
-```json
-{
-  "workbench.editorAssociations": {
-    "*.md": "default",
-    "*.markdown": "default"
-  }
-}
-```
-
-## Git changes in the diff editor
-
-Simple-Mark also shows Markdown diffs: a change in the Source Control view, **Open Changes**,
-the Timeline, or **Compare Selected**. The diff opens in Simple-Mark with the changes marked
-in VS Code's diff colors.
+![A Git change of a Markdown file side by side: the old version on the left, the new on the right, with a changed sentence, a changed formula and an added image marked](images/diff-side-by-side.png)
 
 | Layout | What you see |
 | --- | --- |
-| Side by side | The old version on the left, the new on the right. Removed lines are red, added lines green, changed words darker. Hatched space fills in for lines that only the other side has, so both sides line up and scroll together. |
-| Inline | One editor. Removed lines appear in red above the green lines that replaced them. |
+| **Side by side** | The old version on the left, the new one on the right. Removed lines are red, added lines green, changed words darker. Hatched space fills in for lines that only one side has, so both sides line up and scroll together. |
+| **Inline** | One editor. Removed lines appear in red above the green lines that replaced them. |
 
-The layout follows your `diffEditor.renderSideBySide` setting. To switch, use **Toggle
-Inline View** in the editor title bar (or the Command Palette). Removed lines in the inline
-layout are shown as plain text, without Simple-Mark's styling.
+![The same change inline: each removed line in red above the green line that replaced it](images/diff-inline.png)
 
-You can edit the working file in the diff, in either layout, as in the normal editor. The
-changes are marked again as you type. Ctrl+S saves, and Ctrl+Z / Ctrl+Y undo and redo a word
-at a time, as in VS Code's text editor. Earlier versions from Git are read-only.
+- The layout follows your `diffEditor.renderSideBySide` setting. To switch, use **Toggle
+  Inline View** in the editor title bar (or the Command Palette).
+- Edit the working file in the diff, in either layout. The changes are marked again as you
+  type. **Ctrl+S** saves, and **Ctrl+Z** / **Ctrl+Y** undo and redo a word at a time, as in
+  VS Code's text editor. Earlier versions from Git are read-only.
+- Removed lines in the inline layout are shown as plain text, without Simple-Mark's styling.
 
 ### Allow the diff API
 
-This feature uses `customEditorDiffs`, a proposed VS Code API (VS Code 1.143 or newer).
+The diff editor uses `customEditorDiffs`, a proposed VS Code API (VS Code 1.143 or newer).
 Stable VS Code allows proposed APIs only for extensions that you name:
 
 1. Run **Preferences: Configure Runtime Arguments**. This opens `argv.json`.
@@ -107,6 +54,73 @@ To keep VS Code's text diff for Markdown, add to your settings:
 ```json
 {
   "workbench.diffEditorAssociations": {
+    "*.md": "default",
+    "*.markdown": "default"
+  }
+}
+```
+
+## What you see is what you write
+
+| | |
+| --- | --- |
+| ✍️ **Markdown** | Headings, **bold**, *italic*, `code`, links, lists and quotes appear styled. Their markers stay visible and dimmed. |
+| ∑ **Math** | `$inline$` math shows a rendered tooltip. `$$` blocks render below their source. Use the same TeX syntax as KaTeX and VS Code's preview; Simple-Mark renders it with MathJax. The TeX is colored: commands, brackets in your bracket pair colors, an unmatched brace in red. |
+| 🖼️ **Images** | Images preview below their line. Paths are relative to the document (see Links for paths starting with `/`). Click a preview to open the image. |
+
+### And more
+
+- **Tables**: Tab / Shift+Tab move between cells, Enter adds a row; each re-aligns the
+  table. Korean and other wide characters line up.
+- **Code blocks** are colored by their language, as in VS Code's Markdown preview
+  (highlight.js, 190+ languages).
+- **Links**: Ctrl+Click (⌘+Click on macOS) opens a link: web pages in your browser (VS Code
+  asks first), `#heading` links jump within the document, and paths open in VS Code — images
+  in its image viewer, Markdown files in Simple-Mark. Paths are relative to the document. A
+  path starting with `/` is an absolute path on disk, or else relative to the workspace folder
+  (as in VS Code's own Markdown preview); images are found the same way.
+- **Tab** indents as in VS Code's text editor, by your `editor.tabSize` and
+  `editor.insertSpaces` for Markdown; Shift+Tab outdents. Ctrl+M switches Tab to moving the
+  focus.
+- **Long documents**: the scrollbar thumb stays under the mouse, also while images and
+  formulas are still loading.
+- Follows your color theme, styled like VS Code's Markdown preview. Saving, undo/redo and Git
+  work as with any text editor.
+
+## Installation
+
+Requires **VS Code 1.100.0 or newer**; the diff editor needs VS Code 1.143 or newer.
+
+### From a VSIX file
+
+1. Download `simple-mark-<version>.vsix` from the
+   [latest GitHub release](https://github.com/one-prime/simple-mark/releases/latest).
+2. Open the Command Palette and run **Extensions: Install from VSIX…**.
+3. Select the file, then open a Markdown file.
+
+To build a VSIX yourself, see [Building from source](#building-from-source).
+
+### From the Marketplace
+
+Open Extensions in VS Code and search for `@id:Simple-Mark.simple-mark`, or visit the
+[Simple-Mark Marketplace listing](https://marketplace.visualstudio.com/items?itemName=Simple-Mark.simple-mark).
+The Marketplace does not accept extensions that use proposed APIs, so the diff editor is
+only in the GitHub release.
+
+## Usage
+
+Simple-Mark is the default editor for `.md` and `.markdown` files: open one and it opens in
+Simple-Mark.
+
+- **Open as Text** in the editor title bar (or **Reopen Editor With… → Text Editor**)
+  shows the plain text.
+- **Open with Simple-Mark** in the title bar or the Explorer context menu switches back.
+
+To keep the plain text editor as your default instead, add to your settings:
+
+```json
+{
+  "workbench.editorAssociations": {
     "*.md": "default",
     "*.markdown": "default"
   }
@@ -188,6 +202,10 @@ through a long document. Headless browsers ignore scrollbar drags, so only a rea
 test that. The test starts VS Code 1.143 or newer (`/usr/share/code/code`, or set
 `VSCODE_PATH`) with a temporary profile and Git repository. A VS Code window opens during the
 test. Set `SMOKE_SHOTS=<folder>` with either check to save screenshots.
+
+The screenshots in this README come from `npm run screenshots -w packages/vscode` (after the
+build). It opens sample documents and a Git change in a real VS Code window and saves
+`images/*.png`.
 
 ## License
 

@@ -100,7 +100,8 @@
     "build": "node build.mjs && vite build",
     "smoke": "node test/webview-smoke.mjs",
     "e2e": "node test/vscode-e2e.mjs",
-    "package": "npm run build && vsce package --no-dependencies"
+    "screenshots": "node screenshots.mjs",
+    "package": "npm run build && vsce package --no-dependencies --baseImagesUrl https://github.com/one-prime/simple-mark/raw/HEAD/packages/vscode --baseContentUrl https://github.com/one-prime/simple-mark/blob/HEAD/packages/vscode"
   },
   "devDependencies": {
     "@codemirror/merge": "^6.12.3",
